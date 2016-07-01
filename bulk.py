@@ -1,0 +1,314 @@
+"""Open a gui to easily select what files to analyze"""
+from ui import bulk
+from logs import log, logobject
+from classes import Analyzer
+
+from PyQt4 import QtGui, QtCore
+import sys
+import os
+import subprocess
+
+
+class MA(QtGui.QMainWindow, bulk.Ui_MainWindow):
+    """Main class creating the gui (from UI/bulk.py)
+    
+    Attributes:
+        inputDir (str): Path to directory containing input files (scopefiles)
+        matchFilter (str): Filter to apply to file names
+        outputFileName (str): Path to output file
+    """
+    def __init__(self, parent=None):
+        """Starts the bulk analyzer
+        
+        Args:
+            parent (TYPE, optional): None (to make it standalone)
+        """
+        super(MA, self).__init__(parent)
+        self.setupUi(self)
+
+        # set an empyt outfile name
+        self.outputFileName = ''
+        
+        # set filter to be all at startup
+        self.matchFilter = '*'
+
+        # connect buttons
+        self.dirSelectBtn.clicked.connect(self.selectDir)
+        self.fileSelectBtn.clicked.connect(self.selectFile)
+
+        self.runBtn.clicked.connect(self.batchProcess)
+        self.run1b1Btn.clicked.connect(self.oneByOneProcess)
+
+        self.rightBtn.clicked.connect(self.moveRight)
+        self.leftBtn.clicked.connect(self.moveLeft)
+
+        self.allRightBtn.clicked.connect(self.moveAllRight)
+        self.allLeftBtn.clicked.connect(self.moveAllLeft)
+
+        # connect line edits
+        self.dirLE.editingFinished.connect(self.updateInputDir)
+        self.fileLE.editingFinished.connect(self.updateOutFile)
+        self.filterLE.editingFinished.connect(self.filter)
+
+        # filter cb
+        self.filterCB.stateChanged.connect(self.filter)
+
+    def batchProcess(self):
+        """Process all selected files without user input
+        
+        Returns:
+            None: Description
+        """
+        # check if there are scope files selected
+        if not (self.selectedList.count() > 0):
+            QtGui.QMessageBox.about(self, 'No files selected', 'Select files first.')
+            return
+
+        # check if outfile is defined
+        if not self.outputFileName:
+            self.selectFile()
+            return
+
+        # check if outfile exists
+        if os.path.exists(self.outputFileName):
+            msg = "Output file exists, overwrite?"
+            reply = QtGui.QMessageBox.question(self, 'Existing output file',
+                                               msg, QtGui.QMessageBox.Yes, QtGui.QMessageBox.No)
+            if reply == QtGui.QMessageBox.Yes:
+                pass
+            else:
+                return
+
+        self.progressBar.setEnabled(True)
+        # open the file
+        outFile = open(self.outputFileName, 'w')
+
+        # loop over all selected files
+        for idx in range(self.selectedList.count()-1, -1, -1):
+            item = self.selectedList.item(idx)
+            filename = self.inputDir + '/' + str(item.text())
+            imgFileName = filename.replace("scope", "png")
+                       
+            an = Analyzer(filename)
+            outFile.write(an.writeOut()+'\n')
+            # multiply by 1.0 to avoid rounding to int
+            progressVal = (self.selectedList.count()-idx)*1.0/self.selectedList.count()*100.0
+            self.progressBar.setValue(progressVal)
+            QtGui.QApplication.processEvents()
+
+        outFile.close()
+        self.progressBar.setEnabled(False)
+        QtGui.QMessageBox.about(self, 'Done!', 'All files analysed, output written.')
+
+    def filter(self):
+        """Update the file list by applying the filter
+        
+        Returns:
+            None: Description
+        """
+        if len(str(self.filterLE.text())) > 0:
+            self.matchFilter = str(self.filterLE.text())
+        else:
+            self.matchFilter = '*'
+
+        # reset list
+        self.readDirectory()
+
+        if self.filterCB.isChecked() and not self.matchFilter == '*':
+            for idx in range(self.availableList.count()-1, -1, -1):
+                item = self.availableList.item(idx)
+                itemName = str(item.text())
+                if self.matchFilter in itemName:
+                    continue
+                else:
+                    self.availableList.takeItem(self.availableList.row(item))
+
+        self.updateCountlabels()
+
+    def oneByOneProcess(self):
+        """Calls the GSoundAnalyzer to graphically analyze signals
+        one by one
+        
+        Returns:
+            None: Description
+        """
+        # check if there are scope files selected
+        if not (self.selectedList.count() > 0):
+            QtGui.QMessageBox.about(self, 'No files selected', 'Select files first.')
+            return
+
+        # check if outfile is defined
+        if not self.outputFileName:
+            self.selectFile()
+            return
+
+        # check if outfile exists
+        if os.path.isfile(self.outputFileName):
+            msg = "Output file exists, append?"
+            reply = QtGui.QMessageBox.question(self, 'Existing output file',
+                                               msg, QtGui.QMessageBox.Yes, QtGui.QMessageBox.No)
+            if reply == QtGui.QMessageBox.Yes:
+                pass
+            else:
+                return
+
+        pythonPath = 'python3'
+        thisDir = os.path.dirname(os.path.realpath(__file__))
+        analyzerPath = thisDir + '/classes/GSoundAnalyzer.py'
+
+        self.progressBar.setEnabled(True)
+        #for idx in range(self.selectedList.count()-1, -1, -1):
+        for idx in range(0,self.selectedList.count(),1):
+            item = self.selectedList.item(idx)
+            filename = self.inputDir + '/' + str(item.text())
+            imgFileName = filename.replace("scope", "png")
+            cmd = [pythonPath, analyzerPath, '-i', filename, '-o', self.outputFileName, '-e', imgFileName]
+            
+            print('Starting GSoundAnalyzer for file:', filename)
+            subprocess.call(' '.join(cmd), shell=True)
+
+            progressVal = (self.selectedList.count()-idx)*1.0/self.selectedList.count()*100
+            self.progressBar.setValue(progressVal)
+
+        self.progressBar.setEnabled(False)
+        QtGui.QMessageBox.about(self, 'Done!', 'All files analysed, output written.')
+
+
+    def updateInputDir(self):
+        """Store changes made to the input directory
+        
+        Returns:
+            None: Description
+        """
+        self.readDirectory(self.dirLE.text())
+
+    def updateOutFile(self):
+        """Store changes made to output file path
+        
+        Returns:
+            None: Description
+        """
+        self.outputFileName = str(self.fileLE.text())
+
+    def selectDir(self):
+        """Opens file dialog to select input directory
+        
+        Raises:
+            Exception: When more then one directory is selected
+        
+        Returns:
+            None: Description
+        """
+        dialog = QtGui.QFileDialog(self, 'Select directory containing scope data', directory='/home/gg/Data/GSound_PFC2016_Data/quickAnalysis/')
+        dialog.setFileMode(QtGui.QFileDialog.Directory)
+        dialog.setOption(QtGui.QFileDialog.ShowDirsOnly, True)
+
+        if dialog.exec_():
+            if len(dialog.selectedFiles()) is not 1:
+                raise Exception('Need to select exactly 1 directory.')
+            self.inputDir = str(dialog.selectedFiles()[0])
+
+        self.dirLE.setText(self.inputDir)
+        self.readDirectory()
+
+    def selectFile(self):
+        """opens a file dialog for selecting an output file
+        
+        Raises:
+            Exception: When selected more/less then 1 file
+        
+        Returns:
+            None: Description
+        """
+        dialog = QtGui.QFileDialog(self, 'Select an output file', directory='/home/gg/Data/GSound_PFC2016_Data/quickAnalysis/')
+
+        if dialog.exec_():
+            if len(dialog.selectedFiles()) is not 1:
+                raise Exception('Need to select exactly 1 file.')
+            self.outputFileName = str(dialog.selectedFiles()[0])
+
+        self.fileLE.setText(self.outputFileName)
+
+    def updateCountlabels(self):
+        """Update all the labels showing how many files there are
+        
+        Returns:
+            None: Description
+        """
+        avNo = self.availableList.count()
+        selNo = self.selectedList.count()
+        self.availableLabel.setText('Available files: %i'%avNo)
+        self.selectedLabel.setText('Selected files: %i'%selNo)
+
+
+    def readDirectory(self, inputDir='NOTHING'):
+        """Read through the directory and populate the availableList
+        
+        Args:
+            inputDir (str, optional): Path to input directory
+        
+        Returns:
+            None: Description
+        """
+        self.availableList.clear()
+
+        if inputDir == 'NOTHING':
+            inputDir = self.inputDir
+
+        for f in os.listdir(inputDir):
+            if f.endswith('.scope'):
+                self.availableList.addItem(f)
+        self.updateCountlabels()
+
+    def moveRight(self):
+        """Move a file from left to right (select it)
+        
+        Returns:
+            None: Description
+        """
+        for item in self.availableList.selectedItems():
+            self.selectedList.addItem(str(item.text()))
+            self.availableList.takeItem(self.availableList.row(item))
+        self.updateCountlabels()
+
+    def moveLeft(self):
+        """Move a file from right to left (unselect it)
+        
+        Returns:
+            None: Description
+        """
+        for item in self.selectedList.selectedItems():
+            self.availableList.addItem(str(item.text()))
+            self.selectedList.takeItem(self.selectedList.row(item))
+        self.updateCountlabels()
+
+    def moveAllRight(self):
+        """Move all files to right (select all)
+        
+        Returns:
+            None: Description
+        """
+        for idx in range(self.availableList.count()-1, -1, -1):
+            item = self.availableList.item(idx)
+            self.selectedList.addItem(str(item.text()))
+            self.availableList.takeItem(self.availableList.row(item))
+        self.updateCountlabels()
+
+    def moveAllLeft(self):
+        """Move all files left (deselect all)
+        
+        Returns:
+            None: Description
+        """
+        for idx in range(self.selectedList.count()-1, -1, -1):
+            item = self.selectedList.item(idx)
+            self.availableList.addItem(str(item.text()))
+            self.selectedList.takeItem(self.selectedList.row(item))
+        self.updateCountlabels()
+
+
+if __name__ == '__main__':
+    app = QtGui.QApplication(sys.argv)
+    bulk = MA()
+    bulk.show()
+    app.exec_()

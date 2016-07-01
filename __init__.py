@@ -1,0 +1,1 @@
+"""Main autoAnalyzer module. Making the complete function a useable python package."""
